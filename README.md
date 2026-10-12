@@ -2,7 +2,7 @@
 
 A simple Trello-style task board inside WordPress.
 
-Draggable cards, category bubbles, selected WordPress users, comments, and images. Card details open in an overlapping side panel and save when you close it. Folderino is optional for organising new comment images.
+Draggable cards, category bubbles, selected WordPress users, comments, and images. Administrators can add columns directly on the board; rename, reorder, and remove empty columns in Settings. Card details open in an overlapping side panel and save when you close it. Folderino is optional for organising new comment images.
 
 ## Install
 

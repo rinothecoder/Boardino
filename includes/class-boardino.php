@@ -109,6 +109,7 @@ final class Boardino {
         $member = array( __CLASS__, 'permission' ); $admin = array( __CLASS__, 'admin_permission' );
         register_rest_route( self::API, '/board', array( 'methods' => 'GET', 'callback' => array( __CLASS__, 'board' ), 'permission_callback' => $member ) );
         register_rest_route( self::API, '/settings', array( array( 'methods' => 'GET', 'callback' => array( __CLASS__, 'get_settings' ), 'permission_callback' => $admin ), array( 'methods' => 'POST', 'callback' => array( __CLASS__, 'save_settings' ), 'permission_callback' => $admin ) ) );
+        register_rest_route( self::API, '/columns', array( 'methods' => 'POST', 'callback' => array( __CLASS__, 'add_column' ), 'permission_callback' => $admin ) );
         register_rest_route( self::API, '/cards', array( 'methods' => 'POST', 'callback' => array( __CLASS__, 'create_card' ), 'permission_callback' => $member ) );
         register_rest_route( self::API, '/cards/(?P<id>\d+)', array( array( 'methods' => 'GET', 'callback' => array( __CLASS__, 'get_card' ), 'permission_callback' => $member ), array( 'methods' => 'PATCH', 'callback' => array( __CLASS__, 'update_card' ), 'permission_callback' => $member ) ) );
         register_rest_route( self::API, '/move', array( 'methods' => 'POST', 'callback' => array( __CLASS__, 'move_card' ), 'permission_callback' => $member ) );
@@ -171,6 +172,22 @@ final class Boardino {
             usort( $folders, static fn( $a, $b ) => strnatcasecmp( $a['name'], $b['name'] ) );
         }
         return array( 'settings' => self::settings(), 'users' => self::users( true ), 'folderino' => $active, 'folders' => $folders, 'revision' => self::revision() );
+    }
+    public static function add_column( $r ) {
+        return self::mutate( static function() use ( $r ) {
+            if ( (int) $r['revision'] !== self::revision() ) { return self::error( 'The board has changed. Please try adding the column again.', 409 ); }
+            if ( ! is_string( $r['name'] ) ) { return self::error( 'Give your column a name of up to 60 characters.' ); }
+            $name = trim( sanitize_text_field( $r['name'] ) );
+            if ( '' === $name || mb_strlen( $name ) > 60 ) { return self::error( 'Give your column a name of up to 60 characters.' ); }
+            $settings = self::settings();
+            if ( count( $settings['columns'] ) >= 30 ) { return self::error( 'Use up to 30 columns.' ); }
+            do { $id = 'col_' . str_replace( '-', '', wp_generate_uuid4() ); }
+            while ( in_array( $id, self::ids( $settings['columns'] ), true ) );
+            $column = array( 'id' => $id, 'name' => $name );
+            $settings['columns'][] = $column;
+            update_option( self::OPTION, $settings, false );
+            return array( 'column' => $column, 'revision' => self::revision() + 1 );
+        } );
     }
     public static function save_settings( $r ) {
         return self::mutate( static function() use ( $r ) {

@@ -13,6 +13,7 @@
   let board, panel = null, settingsData = null, saving = false, dragging = false, noticeTimer, lastFocus, mediaFrame = null, mediaOpen = false, imageFocus = null;
   const modalLayer = document.createElement('div'); modalLayer.id = 'bi-modal-layer'; document.getElementById('boardino').appendChild(modalLayer);
   const filters = {search: '', category: '', person: '', archived: false};
+  let columnDraft = null;
   const namedColors = {purple:'#7c3aed',blue:'#2563eb',green:'#16a34a',orange:'#ea580c',rose:'#e11d48',gray:'#666666'};
   const colorHex = value => {
     const raw = namedColors[value] || String(value || '#7c3aed');
@@ -103,6 +104,52 @@
       <span class="bi-card-meta"><span class="bi-card-counts">${card.description ? `<span title="Has a description">${icon('editor-alignleft')}<span class="screen-reader-text">Has a description</span></span>` : ''}${card.comments ? `<span title="${card.comments} comments">${icon('admin-comments')} ${card.comments}<span class="screen-reader-text"> comments</span></span>` : ''}${card.images ? `<span title="${card.images} images">${icon('format-image')} ${card.images}<span class="screen-reader-text"> images</span></span>` : ''}</span>${card.assigneeName ? `<span class="bi-avatar" title="${esc(card.assigneeName)}" aria-label="Assigned to ${esc(card.assigneeName)}">${esc(initials(card.assigneeName))}</span>` : ''}</span>
     </button></article>`;
   }
+  function columnComposerHTML() {
+    if (!cfg.admin || filters.archived) return '';
+    if (!columnDraft) return `<aside id="bi-add-column-slot" class="bi-add-column-slot"><button type="button" class="bi-button bi-button--quiet bi-add-column-button" data-action="column-open" ${board.settings.columns.length >= 30 ? 'disabled title="You can have up to 30 columns."' : ''}>${icon('plus','Add column')}</button></aside>`;
+    return `<aside id="bi-add-column-slot" class="bi-add-column-slot"><form id="bi-column-form" class="bi-column-composer" novalidate><div class="bi-column-composer-heading"><h3>New column</h3><button type="button" class="bi-icon-button" data-action="column-close" aria-label="Close new column">${icon('x')}</button></div><label for="bi-column-name">Column name</label><input id="bi-column-name" name="name" type="text" value="${esc(columnDraft.name)}" maxlength="60" placeholder="For example: Review" autocomplete="off"><div id="bi-column-error" class="bi-error" role="alert" tabindex="-1" ${columnDraft.error ? '' : 'hidden'}>${esc(columnDraft.error)}</div><button type="submit" class="bi-button" ${columnDraft.name.trim() ? '' : 'disabled'}>${icon('plus','Add column')}</button></form></aside>`;
+  }
+  function openColumnComposer() {
+    if (saving || !cfg.admin || board.settings.columns.length >= 30) return;
+    columnDraft = {name:'',error:''};
+    const slot = document.getElementById('bi-add-column-slot');
+    slot.outerHTML = columnComposerHTML();
+    document.getElementById('bi-column-name').focus();
+  }
+  function closeColumnComposer() {
+    if (saving) return;
+    columnDraft = null;
+    document.getElementById('bi-add-column-slot').outerHTML = columnComposerHTML();
+    document.querySelector('[data-action="column-open"]')?.focus();
+  }
+  async function addColumn(form) {
+    if (saving || !cfg.admin || !columnDraft) return;
+    columnDraft.name = form.elements.name.value;
+    const name = columnDraft.name.trim();
+    if (!name) { columnDraft.error = 'Give your column a name.'; errorIn('bi-column-error',columnDraft.error); return; }
+    saving = true; columnDraft.error = '';
+    document.getElementById('bi-column-error').hidden = true;
+    setBusy(form,true,'Adding…');
+    jQuery('.bi-card-list.ui-sortable').sortable('disable');
+    try {
+      const result = await api('columns',{method:'POST',body:{name,revision:board.revision}});
+      board.settings.columns.push(result.column); board.revision = result.revision;
+      columnDraft = null; renderBoard();
+      const heading = [...main.querySelectorAll('.bi-column')].find(el => el.dataset.column === result.column.id)?.querySelector('h3');
+      if (heading) { heading.tabIndex = -1; heading.focus(); }
+      toast('Column added.');
+    } catch (e) {
+      columnDraft.error = e.message;
+      if (e.status === 409) {
+        try { await loadBoard(); } catch (_) { /* Preserve the draft if the connection is unavailable. */ }
+      }
+      errorIn('bi-column-error',columnDraft.error);
+    } finally {
+      saving = false;
+      if (form.isConnected) setBusy(form,false);
+      if (!filters.archived && !filters.search && !filters.category && !filters.person) jQuery('.bi-card-list.ui-sortable').sortable('enable');
+    }
+  }
   function renderBoard() {
     const count = board.cards.filter(shown).length;
     main.className = 'bi-main';
@@ -111,7 +158,7 @@
       <div class="bi-board" aria-label="${esc(board.settings.name)}">${board.settings.columns.map(col => {
         const cards = board.cards.filter(c => c.column === col.id && shown(c));
         return `<section class="bi-column" data-column="${esc(col.id)}" aria-label="${esc(col.name)}"><div class="bi-column-heading"><h3>${esc(col.name)}</h3><span class="bi-column-count">${cards.length}</span></div><div class="bi-card-list" data-column="${esc(col.id)}">${cards.map(cardHTML).join('')}</div><p class="bi-column-empty" ${cards.length ? 'hidden' : ''}>${filters.archived ? 'No archived cards' : (filters.search || filters.category || filters.person) ? 'No matching cards' : 'Nothing here yet'}</p>${!filters.archived ? `<button class="bi-add-card" data-action="new" data-column="${esc(col.id)}">${icon('plus-alt2', 'Add card')}</button>` : ''}</section>`;
-      }).join('')}</div>${filters.search || filters.category || filters.person ? '<p class="bi-board-help">Clear filters to move cards.</p>' : ''}`;
+      }).join('')}${columnComposerHTML()}</div>${filters.search || filters.category || filters.person ? '<p class="bi-board-help">Clear filters to move cards.</p>' : ''}`;
     installSorting();
   }
   function installSorting() {
@@ -393,6 +440,8 @@
     const action = el.dataset.action;
     if(action === 'color-picker') openColorPicker(el);
     if(action === 'color-done') { const hex = colorPicker?.popup.querySelector('.bi-color-hex'); if(hex && /^#[0-9a-f]{6}$/i.test(hex.value)) { const button = colorPicker.control.querySelector('button'); closeColorPicker(); button.focus(); } }
+    if (action === 'column-open') openColumnComposer();
+    if (action === 'column-close') closeColumnComposer();
     if (action === 'clear-filters') { filters.search = ''; filters.category = ''; filters.person = ''; renderBoard(); }
     if (action === 'open') openCard(Number(el.dataset.id));
     if (action === 'new') openCard(0, el.dataset.column);
@@ -427,13 +476,15 @@
     if (action === 'row-down' && !saving) { const row = el.closest('.bi-settings-row'); if(row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling,row); el.focus(); }
   });
   document.getElementById('boardino').addEventListener('submit', event => {
-    if (!['bi-card-form','bi-comment-form','bi-settings-form'].includes(event.target.id)) return;
+    if (!['bi-card-form','bi-comment-form','bi-settings-form','bi-column-form'].includes(event.target.id)) return;
     event.preventDefault();
+    if (event.target.id === 'bi-column-form') addColumn(event.target);
     if (event.target.id === 'bi-card-form') saveCard(event.target);
     if (event.target.id === 'bi-comment-form') postComment(event.target);
     if (event.target.id === 'bi-settings-form') saveSettings(event.target);
   });
   main.addEventListener('input', event => {
+    if (event.target.id === 'bi-column-name' && columnDraft) { columnDraft.name = event.target.value; event.target.form.querySelector('[type="submit"]').disabled = !columnDraft.name.trim(); return; }
     if (event.target.id !== 'bi-search') return;
     filters.search = event.target.value;
     const selection = event.target.selectionStart;
@@ -456,6 +507,7 @@
   layer.addEventListener('drop', event => { if(event.target.closest('#bi-comment-form')) { event.preventDefault(); queueFiles(event.dataTransfer.files); } });
   document.addEventListener('keydown', event => {
     if(colorPicker && event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); const button = colorPicker.control.querySelector('button'); closeColorPicker(); button.focus(); return; }
+    if (columnDraft && event.key === 'Escape' && event.target.closest('#bi-column-form')) { event.preventDefault(); closeColumnComposer(); return; }
     if (!panel || mediaOpen) return;
     if(modalLayer.children.length) {
       if(event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); if(modalLayer.querySelector('.bi-confirm-dialog')) { if(!saving) closeArchive(); } else closeImage(); }
@@ -477,5 +529,5 @@
   });
   window.addEventListener('beforeunload', event => { if (dirty() || (cfg.settings && settingsBaseline && settingsBaseline !== JSON.stringify(readSettings()))) { event.preventDefault(); event.returnValue = ''; } });
   (cfg.settings ? loadSettings() : loadBoard()).catch(e => { main.innerHTML = `<div class="bi-load-error"><h2>Couldn’t load ${cfg.settings ? 'settings' : 'your board'}</h2><p>${esc(e.message)}</p><a class="bi-button" href="${esc(cfg.settings ? cfg.settingsUrl : cfg.boardUrl)}">Try again</a></div>`; });
-  if (!cfg.settings) setInterval(async () => { if (!panel && !saving && !dragging && document.visibilityState === 'visible') { try { const fresh = await api('board'); if (board && fresh.revision !== board.revision) { board = fresh; renderBoard(); } } catch (_) { /* Keep a usable board during temporary connection loss. */ } } }, 30000);
+  if (!cfg.settings) setInterval(async () => { if (!panel && !columnDraft && !saving && !dragging && document.visibilityState === 'visible') { try { const fresh = await api('board'); if (board && fresh.revision !== board.revision) { board = fresh; renderBoard(); } } catch (_) { /* Keep a usable board during temporary connection loss. */ } } }, 30000);
 })();
