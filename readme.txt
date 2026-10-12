@@ -4,7 +4,7 @@ Tags: kanban, board, tasks, comments
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.0
-Stable tag: 0.1.8
+Stable tag: 0.1.9
 License: GPLv2 or later
 
 A simple shared board inside WordPress.
@@ -23,6 +23,9 @@ Cards and comments stay in WordPress. Deactivating Boardino preserves all data. 
 4. Open the board and add your first card.
 
 == Changelog ==
+= 0.1.9 =
+Use the canonical lowercase GitHub repository name for updates.
+
 = 0.1.8 =
 Make the manual Check for updates button work alongside the board forms.
 

@@ -3,9 +3,9 @@ if (!defined('ABSPATH')) { exit; }
 
 /** Published GitHub releases integrated with the standard WordPress updater. */
 final class Boardino_Updates {
-    const REPO = 'rinothecoder/Boardino';
-    const UPDATE_URI = 'https://github.com/rinothecoder/Boardino/';
-    const API = 'https://api.github.com/repos/rinothecoder/Boardino';
+    const REPO = 'rinothecoder/boardino';
+    const UPDATE_URI = 'https://github.com/rinothecoder/boardino/';
+    const API = 'https://api.github.com/repos/rinothecoder/boardino';
     const MAX_PACKAGE_BYTES = 20971520;
 
     public static function boot() {
@@ -102,7 +102,7 @@ final class Boardino_Updates {
         return $parts && ($parts['scheme'] ?? '') === 'https' && ($parts['host'] ?? '') === 'codeload.github.com'
             && !isset($parts['user']) && !isset($parts['pass']) && !isset($parts['fragment'])
             && (!isset($parts['port']) || $parts['port'] === 443)
-            && in_array($parts['path'] ?? '', ['/' . self::REPO . '/legacy.zip/' . $commit, '/' . self::REPO . '/zip/' . $commit], true);
+            && in_array(strtolower($parts['path'] ?? ''), ['/' . self::REPO . '/legacy.zip/' . $commit, '/' . self::REPO . '/zip/' . $commit], true);
     }
     public static function download($reply, $package, $upgrader, $extra) {
         if (!self::own_update($extra) || is_wp_error($reply)) { return $reply; }
