@@ -38,6 +38,9 @@ try {
             if (count($board['settings']['columns']) !== 3 || !is_plugin_active('boardino/boardino.php')) throw new RuntimeException('Board must still work');
             echo 'PASS: older WordPress compatibility without Abilities API';`;
     const result = await server.playground.run({ code });
+    const updates = await server.playground.run({ code: "<?php define('BOARDINO_TEST_SITE', true); require '/wordpress/wp-content/plugins/boardino/tests/updates.integration.php';" });
+    console.log(updates.text);
+    if (!updates.text.includes('PASS:')) throw new Error('Updater tests failed');
     console.log(result.text);
     if (result.errors) console.error(result.errors);
     if (result.exitCode !== 0 || !result.text.includes('PASS:')) throw new Error('Integration tests failed');

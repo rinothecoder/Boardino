@@ -12,7 +12,7 @@ Requires WordPress 6.4+ and PHP 8.0+.
 
 ## Updates
 
-Boardino checks published stable GitHub releases through the normal WordPress update system. You can also use **Boardino → Settings → Check for updates**. No GitHub token is needed. Automatic updates follow your WordPress settings.
+Boardino checks published stable GitHub releases through the normal WordPress update system. Use **Plugins → Boardino → Check for updates**, or **Boardino → Settings → Check for updates**. The plugin-row action refreshes the release check and WordPress update list, then shows whether an update is available; it does not install the update. No GitHub token is needed. Automatic updates follow your WordPress settings.
 
 Updates preserve cards, comments, settings, and media. Deactivation and uninstall also preserve board data.
 
@@ -43,7 +43,7 @@ For example, call `boardino/create-card` with `{"title":"Review homepage"}`, the
 
 ## Local integration tests
 
-Run `npm ci` and `npm run test:abilities` with Node.js 20.18+ (or newer). The runner boots a disposable local WordPress Playground instance, installs the official MCP Adapter, and checks real abilities registration, schemas, permissions, card workflows, media access, conflicts, core REST execution, and adapter discovery/execution. It never connects to your live WordPress site. The first run downloads WordPress, PHP WebAssembly, and the adapter from official sources. Set `BI_TEST_WP` and `BI_TEST_PHP` to test another supported combination, for example `BI_TEST_WP=latest BI_TEST_PHP=8.3 npm run test:abilities`.
+Run `npm ci` and `npm run test:abilities` with Node.js 20.18+ (or newer). The runner boots a disposable local WordPress Playground instance, installs the official MCP Adapter, and checks real abilities registration, schemas, permissions, card workflows, media access, conflicts, core REST execution, adapter discovery/execution, and the plugin-row update link, feedback, permissions and package validation. It never connects to your live WordPress site. The first run downloads WordPress, PHP WebAssembly, and the adapter from official sources. Set `BI_TEST_WP` and `BI_TEST_PHP` to test another supported combination, for example `BI_TEST_WP=latest BI_TEST_PHP=8.3 npm run test:abilities`.
 
 ## Publish a release
 

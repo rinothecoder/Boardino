@@ -14,6 +14,10 @@ final class Boardino_Updates {
         add_filter('upgrader_pre_download', [__CLASS__, 'download'], 10, 4);
         add_filter('upgrader_source_selection', [__CLASS__, 'source'], 10, 4);
         add_action('admin_post_boardino_check_updates', [__CLASS__, 'check']);
+        add_filter('plugin_action_links_' . plugin_basename(BOARDINO_FILE), [__CLASS__, 'links']);
+        add_filter('network_admin_plugin_action_links_' . plugin_basename(BOARDINO_FILE), [__CLASS__, 'links']);
+        add_action('admin_notices', [__CLASS__, 'notice']);
+        add_action('network_admin_notices', [__CLASS__, 'notice']);
     }
     private static function cache_key() { return 'boardino_github_release'; }
     private static function args() {
@@ -153,16 +157,44 @@ final class Boardino_Updates {
         foreach (['includes/class-boardino.php', 'includes/class-boardino-updates.php', 'assets/admin.js', 'assets/admin.css', 'assets/lucide-icons.js', 'assets/boardino-icon.svg', 'assets/boardino-sidebar.svg'] as $required) {
             if (!$wp_filesystem->is_file(trailingslashit($source) . $required)) { return self::error('package_incomplete', 'The published Boardino release is missing required files.'); }
         }
+        if (version_compare($version[1], '0.1.12', '>=') && !$wp_filesystem->is_file(trailingslashit($source) . 'includes/class-boardino-abilities.php')) {
+            return self::error('package_incomplete', 'The published Boardino release is missing required files.');
+        }
         // GitHub archives use an owner/repo/hash folder; WordPress needs boardino/.
         $target = trailingslashit(dirname(untrailingslashit($source))) . 'boardino/';
         if (untrailingslashit($source) === untrailingslashit($target)) { return $source; }
         return $wp_filesystem->move($source, $target, true) ? $target : self::error('package_folder', 'Could not prepare the Boardino update folder.');
     }
+    public static function links($links) {
+        if (!current_user_can('update_plugins')) { return $links; }
+        $destination = is_network_admin() ? 'network-plugins' : 'plugins';
+        $url = wp_nonce_url(admin_url('admin-post.php?action=boardino_check_updates&return_to=' . $destination), 'boardino_check_updates');
+        $links['boardino-check-updates'] = '<a href="' . esc_url($url) . '">Check for updates</a>';
+        return $links;
+    }
+    private static function check_destination() {
+        $destination = isset($_GET['return_to']) && is_string($_GET['return_to']) ? sanitize_key(wp_unslash($_GET['return_to'])) : '';
+        if ($destination === 'plugins') { return admin_url('plugins.php?boardino_update_check=1'); }
+        if ($destination === 'network-plugins') { return network_admin_url('plugins.php?boardino_update_check=1'); }
+        return admin_url('admin.php?page=boardino-settings#bi-updates');
+    }
+    public static function notice() {
+        $screen = get_current_screen();
+        if (!current_user_can('update_plugins') || !$screen || !in_array($screen->id, ['plugins', 'plugins-network'], true) || !isset($_GET['boardino_update_check']) || $_GET['boardino_update_check'] !== '1') { return; }
+        $cached = get_site_transient(self::cache_key());
+        $release = is_array($cached) ? ($cached['release'] ?? null) : null;
+        $style = $release ? 'notice-success' : 'notice-warning';
+        $message = $release ? (version_compare($release['version'], BOARDINO_VERSION, '>')
+            ? 'Version ' . $release['version'] . ' is available. Use Update now in the Boardino plugin row.'
+            : 'You have the latest published version (' . BOARDINO_VERSION . ').')
+            : ($cached['error'] ?? 'Could not check for updates. Please try again.');
+        echo '<div class="notice ' . esc_attr($style) . ' is-dismissible"><p><strong>Boardino:</strong> ' . esc_html($message) . '</p></div>';
+    }
     public static function check() {
-        if (!current_user_can('update_plugins')) { wp_die('You cannot check plugin updates.'); }
+        if (!current_user_can('update_plugins')) { wp_die('You cannot check plugin updates.', '', ['response' => 403]); }
         check_admin_referer('boardino_check_updates');
         self::release(true); wp_clean_plugins_cache(); wp_update_plugins();
-        wp_safe_redirect(admin_url('admin.php?page=boardino-settings#bi-updates')); exit;
+        wp_safe_redirect(self::check_destination()); exit;
     }
     public static function screen() {
         $cached = get_site_transient(self::cache_key());
