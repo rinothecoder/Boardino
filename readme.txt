@@ -4,7 +4,7 @@ Tags: kanban, board, tasks, comments
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.0
-Stable tag: 0.1.11
+Stable tag: 0.1.12
 License: GPLv2 or later
 
 A simple shared board inside WordPress.
@@ -23,6 +23,9 @@ Cards and comments stay in WordPress. Deactivating Boardino preserves all data. 
 4. Open the board and add your first card.
 
 == Changelog ==
+= 0.1.12 =
+Add WordPress Abilities API tools for cards, comments, columns, and categories, with existing board permissions and concurrency checks. Requires WordPress 6.9+ for abilities; the ordinary board remains compatible with WordPress 6.4+.
+
 = 0.1.11 =
 Give Add column the same subtle background and border as the board columns.
 
