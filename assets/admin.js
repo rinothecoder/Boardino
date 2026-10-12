@@ -427,6 +427,7 @@
     if (action === 'row-down' && !saving) { const row = el.closest('.bi-settings-row'); if(row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling,row); el.focus(); }
   });
   document.getElementById('boardino').addEventListener('submit', event => {
+    if (!['bi-card-form','bi-comment-form','bi-settings-form'].includes(event.target.id)) return;
     event.preventDefault();
     if (event.target.id === 'bi-card-form') saveCard(event.target);
     if (event.target.id === 'bi-comment-form') postComment(event.target);
