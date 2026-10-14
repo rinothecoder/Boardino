@@ -37,7 +37,7 @@ foreach ( $names as $name ) {
 }
 $member = wp_insert_user( array( 'user_login' => 'boardino-member', 'user_pass' => 'local-test-only', 'role' => 'subscriber', 'display_name' => 'Board member' ) );
 $outsider = wp_insert_user( array( 'user_login' => 'boardino-outsider', 'user_pass' => 'local-test-only', 'role' => 'editor' ) );
-$settings = Boardino::settings(); $settings['members'] = array( $member ); $settings['folder_id'] = 999;
+$settings = Boardino::settings(); $settings['roles'] = array( 'administrator', 'subscriber' ); $settings['folder_id'] = 999;
 update_option( Boardino::OPTION, $settings );
 $inputs = array(
     'get-board' => array(), 'list-cards' => array(), 'get-card' => array( 'id' => 99999 ),
@@ -76,7 +76,7 @@ $b = bi_call( 'create-card', array( 'title' => 'Second', 'column' => 'doing' ) )
 $c = bi_call( 'create-card', array( 'title' => 'Third', 'column' => 'doing' ) );
 bi_assert( $b['description'] === '' && $b['assignee'] === 0 && $b['category'] === '', 'Optional creation fields have defaults.' );
 $list = bi_call( 'list-cards', array( 'limit' => 1, 'offset' => 1 ) );
-bi_assert( $list['total'] === 3 && count( $list['cards'] ) === 1 && $list['cards'][0]['id'] === $b['id'], 'Pagination and stable order.' );
+bi_assert( $list['total'] === 3 && count( $list['cards'] ) === 1 && $list['cards'][0]['id'] === $a['id'], 'Pagination and stable order.' );
 bi_assert( bi_call( 'list-cards', array( 'search' => 'DESCRIPTION' ) )['total'] === 1, 'Case-insensitive description search.' );
 bi_assert( bi_call( 'list-cards', array( 'column' => 'doing', 'category' => '', 'assignee' => 0 ) )['total'] === 2, 'Combined filters include empty category and unassigned.' );
 bi_assert( bi_call( 'list-cards', array( 'assignee' => '0', 'archived' => 'false' ) )['total'] === 2, 'Normalize scalar strings accepted by core schemas before filtering.' );
@@ -102,10 +102,10 @@ bi_error( 'move-card', array( 'id' => $a['id'], 'column' => 'doing', 'revision' 
 bi_error( 'move-card', array( 'id' => $a['id'], 'column' => 'missing', 'revision' => $revision ), 400 );
 bi_call( 'move-card', array( 'id' => $a['id'], 'column' => 'doing', 'revision' => $revision, 'position' => 1 ) );
 $list = bi_call( 'list-cards', array( 'column' => 'doing' ) );
-bi_assert( array_column( $list['cards'], 'id' ) === array( $b['id'], $a['id'], $c['id'] ), 'Insert between destination cards without losing any.' );
+bi_assert( array_column( $list['cards'], 'id' ) === array( $c['id'], $a['id'], $b['id'] ), 'Insert between destination cards without losing any.' );
 bi_call( 'move-card', array( 'id' => $a['id'], 'column' => 'doing', 'revision' => $list['revision'] ) );
 $list = bi_call( 'list-cards', array( 'column' => 'doing' ) );
-bi_assert( array_column( $list['cards'], 'id' ) === array( $b['id'], $c['id'], $a['id'] ), 'Same-column move appends by default.' );
+bi_assert( array_column( $list['cards'], 'id' ) === array( $c['id'], $b['id'], $a['id'] ), 'Same-column move appends by default.' );
 bi_error( 'add-comment', array( 'id' => $a['id'] ), 400 );
 bi_error( 'add-comment', array( 'id' => $a['id'], 'text' => 'Spoof', 'user_id' => 1 ) );
 $commented = bi_call( 'add-comment', array( 'id' => $a['id'], 'text' => '<b>Hello</b>' ) );
@@ -119,6 +119,15 @@ bi_error( 'add-comment', array( 'id' => $a['id'], 'images' => array( $inaccessib
 $with_image = bi_call( 'add-comment', array( 'id' => $a['id'], 'images' => array( $attachment ) ) );
 bi_assert( $with_image['card']['images'] === 1 && $with_image['comments'][1]['images'][0]['id'] === $attachment, 'Accessible existing image can be attached without upload.' );
 bi_assert( ! get_post_meta( $attachment, '_bi_card', true ), 'Selected existing image is not moved or owned by the board.' );
+$multi = bi_call( 'create-card', array( 'title' => 'Multiple assignees and task images', 'assignees' => array( 1, $member ), 'images' => array( $attachment ) ) );
+bi_assert( $multi['assignees'] === array( 1, $member ) && count( $multi['assigneeUsers'] ) === 2 && $multi['taskImages'][0]['id'] === $attachment, 'Multiple assignees and task images exposed through validated ability schemas.' );
+bi_assert( bi_call( 'list-cards', array( 'assignee' => $member ) )['total'] === 1, 'Filter matches any person assigned to a card.' );
+$multi_edited = bi_call( 'update-card', array( 'id' => $multi['id'], 'version' => $multi['version'], 'title' => 'Keep people and task images' ) );
+bi_assert( $multi_edited['assignees'] === $multi['assignees'] && $multi_edited['taskImages'] === $multi['taskImages'], 'Partial update keeps multiple assignees and task images.' );
+bi_error( 'update-card', array( 'id' => $multi['id'], 'version' => $multi_edited['version'], 'assignee' => 0, 'assignees' => array() ), 400 );
+$multi_cleared = bi_call( 'update-card', array( 'id' => $multi['id'], 'version' => $multi_edited['version'], 'assignees' => array(), 'images' => array() ) );
+bi_assert( $multi_cleared['assignees'] === array() && $multi_cleared['taskImages'] === array() && get_post( $attachment ) instanceof WP_Post, 'Explicit clearing preserves the media file.' );
+wp_delete_post( $multi['id'], true );
 $archived = bi_call( 'archive-card', array( 'id' => $a['id'], 'version' => $with_image['card']['version'] ) );
 bi_assert( $archived['archived'] && bi_call( 'list-cards' )['total'] === 2 && bi_call( 'list-cards', array( 'archived' => true ) )['total'] === 1, 'Archive filters active and archived lists.' );
 bi_assert( count( bi_call( 'get-card', array( 'id' => $a['id'] ) )['comments'] ) === 2, 'Archived comments remain readable.' );

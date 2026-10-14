@@ -36,6 +36,10 @@ final class Boardino_Abilities {
         return array( 'type' => 'array', 'items' => $items );
     }
 
+    private static function image_schema() {
+        return self::object_schema( array( 'id' => array( 'type' => 'integer' ), 'url' => array( 'type' => 'string' ), 'thumb' => array( 'type' => 'string' ), 'name' => array( 'type' => 'string' ) ), array( 'id', 'url', 'thumb', 'name' ) );
+    }
+
     private static function card_schema() {
         return self::object_schema( array(
             'id' => array( 'type' => 'integer' ), 'title' => array( 'type' => 'string' ),
@@ -43,8 +47,11 @@ final class Boardino_Abilities {
             'category' => array( 'type' => 'string' ), 'assignee' => array( 'type' => 'integer' ),
             'assigneeName' => array( 'type' => 'string' ), 'order' => array( 'type' => 'integer' ),
             'version' => array( 'type' => 'integer' ), 'archived' => array( 'type' => 'boolean' ),
-            'comments' => array( 'type' => 'integer' ), 'images' => array( 'type' => 'integer' ),
-        ), array( 'id', 'title', 'description', 'column', 'category', 'assignee', 'assigneeName', 'order', 'version', 'archived', 'comments', 'images' ) );
+            'comments' => array( 'type' => 'integer' ), 'images' => array( 'type' => 'integer', 'description' => 'Legacy comment-image count.' ),
+            'assignees' => self::list_schema( array( 'type' => 'integer' ) ),
+            'assigneeUsers' => self::list_schema( self::object_schema( array( 'id' => array( 'type' => 'integer' ), 'name' => array( 'type' => 'string' ), 'avatarUrl' => array( 'type' => 'string' ) ), array( 'id', 'name', 'avatarUrl' ) ) ),
+            'taskImages' => self::list_schema( self::image_schema() ),
+        ), array( 'id', 'title', 'description', 'column', 'category', 'assignee', 'assigneeName', 'order', 'version', 'archived', 'comments', 'images', 'assignees', 'assigneeUsers', 'taskImages' ) );
     }
 
     public static function register() {
@@ -58,18 +65,20 @@ final class Boardino_Abilities {
             'description' => self::text_schema( 'Plain-text description. An empty string clears it.', 20000 ),
             'column' => self::text_schema( 'Existing column ID from get-board.', 40, 1 ),
             'category' => self::text_schema( 'Existing category ID from get-board. An empty string removes the category.', 40 ),
-            'assignee' => self::integer_schema( 'User ID from get-board.users. Use 0 to unassign.', 0 ),
+            'assignee' => self::integer_schema( 'Legacy single user ID from get-board.users. Use 0 to unassign. Prefer assignees for multiple people; do not supply both.', 0 ),
+            'assignees' => array( 'type' => 'array', 'items' => self::integer_schema( 'User ID from get-board.users.' ), 'uniqueItems' => true, 'description' => 'Assigned people. An empty array unassigns everyone.' ),
+            'images' => array( 'type' => 'array', 'items' => self::integer_schema( 'Accessible existing Media Library image ID.' ), 'uniqueItems' => true, 'maxItems' => 10, 'description' => 'Task images, separate from comment images. An empty array removes task-image links without deleting media.' ),
         );
         $named = self::object_schema( array( 'id' => array( 'type' => 'string' ), 'name' => array( 'type' => 'string' ) ), array( 'id', 'name' ) );
         $category = $named; $category['properties']['color'] = array( 'type' => 'string' ); $category['required'][] = 'color';
-        $image = self::object_schema( array( 'id' => array( 'type' => 'integer' ), 'url' => array( 'type' => 'string' ), 'thumb' => array( 'type' => 'string' ), 'name' => array( 'type' => 'string' ) ), array( 'id', 'url', 'thumb', 'name' ) );
+        $image = self::image_schema();
         $comment = self::object_schema( array(
             'id' => array( 'type' => 'integer' ), 'author' => array( 'type' => 'string' ),
-            'userId' => array( 'type' => 'integer' ), 'text' => array( 'type' => 'string' ),
+            'userId' => array( 'type' => 'integer' ), 'avatarUrl' => array( 'type' => 'string' ), 'text' => array( 'type' => 'string' ),
             'date' => array( 'type' => 'string' ), 'images' => self::list_schema( $image ),
         ), array( 'id', 'author', 'userId', 'text', 'date', 'images' ) );
         $detail = self::object_schema( array( 'card' => self::card_schema(), 'comments' => self::list_schema( $comment ) ), array( 'card', 'comments' ) );
-        $user = self::object_schema( array( 'id' => array( 'type' => 'integer' ), 'name' => array( 'type' => 'string' ), 'admin' => array( 'type' => 'boolean' ) ), array( 'id', 'name', 'admin' ) );
+        $user = self::object_schema( array( 'id' => array( 'type' => 'integer' ), 'name' => array( 'type' => 'string' ), 'admin' => array( 'type' => 'boolean' ), 'avatarUrl' => array( 'type' => 'string' ) ), array( 'id', 'name', 'admin', 'avatarUrl' ) );
         $filters = array(
             'column' => $fields['column'], 'category' => $fields['category'], 'assignee' => $fields['assignee'],
             'archived' => array( 'type' => 'boolean', 'default' => false, 'description' => 'False lists active cards; true lists archived cards.' ),
@@ -151,36 +160,59 @@ final class Boardino_Abilities {
         }
         $cards = array_values( array_filter( $board['cards'], static function( $card ) use ( $input ) {
             if ( $card['archived'] !== ( $input['archived'] ?? false ) ) { return false; }
-            foreach ( array( 'column', 'category', 'assignee' ) as $field ) {
+            foreach ( array( 'column', 'category' ) as $field ) {
                 if ( isset( $input[$field] ) && $card[$field] !== $input[$field] ) { return false; }
             }
+            if ( isset( $input['assignee'] ) && ( $input['assignee'] === 0 ? !empty( $card['assignees'] ) : !in_array( $input['assignee'], $card['assignees'], true ) ) ) { return false; }
             return empty( $input['search'] ) || false !== mb_stripos( $card['title'] . "\n" . $card['description'], $input['search'] );
         } ) );
         $limit = $input['limit'] ?? 50; $offset = $input['offset'] ?? 0;
-        return array( 'cards' => array_slice( $cards, $offset, $limit ), 'total' => count( $cards ), 'limit' => $limit, 'offset' => $offset, 'revision' => $board['revision'] );
+        return array( 'cards' => array_map( array( __CLASS__, 'card_output' ), array_slice( $cards, $offset, $limit ) ), 'total' => count( $cards ), 'limit' => $limit, 'offset' => $offset, 'revision' => $board['revision'] );
     }
 
-    public static function get_card( $input ) { return Boardino::get_card( self::request( $input ) ); }
+    public static function card_output( $card ) {
+        if ( is_wp_error( $card ) ) { return $card; }
+        $card['taskImages'] = $card['images'];
+        $card['images'] = (int) get_post_meta( $card['id'], '_bi_image_count', true );
+        $card['assignee'] = $card['assignees'][0] ?? 0;
+        $card['assigneeName'] = $card['assigneeUsers'][0]['name'] ?? '';
+        return $card;
+    }
+    private static function detail_output( $detail ) {
+        if ( ! is_wp_error( $detail ) ) { $detail['card'] = self::card_output( $detail['card'] ); }
+        return $detail;
+    }
+    private static function normalize_assignees( $input ) {
+        if ( array_key_exists( 'assignee', $input ) ) {
+            if ( array_key_exists( 'assignees', $input ) ) { return new WP_Error( 'boardino_error', 'Supply assignees or the legacy assignee field, not both.', array( 'status' => 400 ) ); }
+            $input['assignees'] = $input['assignee'] ? array( $input['assignee'] ) : array();
+            unset( $input['assignee'] );
+        }
+        return $input;
+    }
+    public static function get_card( $input ) { return self::detail_output( Boardino::get_card( self::request( $input ) ) ); }
 
     public static function create_card( $input ) {
+        $input = self::normalize_assignees( $input ); if ( is_wp_error( $input ) ) { return $input; }
         $columns = array_column( Boardino::settings()['columns'], 'id' );
-        $input += array( 'column' => in_array( 'todo', $columns, true ) ? 'todo' : ( $columns[0] ?? '' ), 'description' => '', 'category' => '', 'assignee' => 0 );
-        return Boardino::create_card( self::request( $input ) );
+        $input += array( 'column' => in_array( 'todo', $columns, true ) ? 'todo' : ( $columns[0] ?? '' ), 'description' => '', 'category' => '', 'assignees' => array(), 'images' => array() );
+        return self::card_output( Boardino::create_card( self::request( $input ) ) );
     }
 
     public static function update_card( $input ) {
-        $fields = array( 'title', 'description', 'column', 'category', 'assignee' );
+        $input = self::normalize_assignees( $input ); if ( is_wp_error( $input ) ) { return $input; }
+        $fields = array( 'title', 'description', 'column', 'category', 'assignees', 'images' );
         if ( ! array_intersect( array_keys( $input ), $fields ) ) {
             return new WP_Error( 'boardino_error', 'Supply at least one card field to update.', array( 'status' => 400 ) );
         }
-        $detail = self::get_card( $input );
+        $detail = Boardino::get_card( self::request( $input ) );
         if ( is_wp_error( $detail ) ) { return $detail; }
         // Merge for partial updates; the original method rechecks the supplied
         // version inside the write lock before storing any of these fields.
         foreach ( $fields as $field ) {
-            if ( ! array_key_exists( $field, $input ) ) { $input[$field] = $detail['card'][$field]; }
+            if ( ! array_key_exists( $field, $input ) ) { $input[$field] = 'images' === $field ? array_column( $detail['card']['images'], 'id' ) : $detail['card'][$field]; }
         }
-        return Boardino::update_card( self::request( $input ) );
+        return self::card_output( Boardino::update_card( self::request( $input ) ) );
     }
 
     public static function move_card( $input ) {
@@ -198,9 +230,9 @@ final class Boardino_Abilities {
         return Boardino::move_card( self::request( $input ) );
     }
 
-    public static function archive_card( $input ) { $input['archived'] = true; return Boardino::update_card( self::request( $input ) ); }
-    public static function restore_card( $input ) { $input['archived'] = false; return Boardino::update_card( self::request( $input ) ); }
-    public static function add_comment( $input ) { return Boardino::add_comment( self::request( $input ) ); }
+    public static function archive_card( $input ) { $input['archived'] = true; return self::card_output( Boardino::update_card( self::request( $input ) ) ); }
+    public static function restore_card( $input ) { $input['archived'] = false; return self::card_output( Boardino::update_card( self::request( $input ) ) ); }
+    public static function add_comment( $input ) { return self::detail_output( Boardino::add_comment( self::request( $input ) ) ); }
     public static function add_column( $input ) { return Boardino::add_column( self::request( $input ) ); }
     public static function create_category( $input ) { return Boardino::save_category( self::request( $input ) ); }
     public static function update_category( $input ) { return Boardino::save_category( self::request( $input ) ); }

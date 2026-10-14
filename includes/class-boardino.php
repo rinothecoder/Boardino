@@ -8,13 +8,17 @@ final class Boardino {
 
     public static function defaults() {
         return array(
-            'name' => 'My board', 'members' => array(), 'folder_id' => 0,
+            'name' => 'My board', 'roles' => array( 'administrator' ), 'members' => array(), 'folder_id' => 0,
             'columns' => array( array( 'id' => 'todo', 'name' => 'To do' ), array( 'id' => 'doing', 'name' => 'Doing' ), array( 'id' => 'done', 'name' => 'Done' ) ),
             'categories' => array(),
         );
     }
     public static function settings() {
-        return wp_parse_args( get_option( self::OPTION, array() ), self::defaults() );
+        $stored = get_option( self::OPTION, null );
+        $settings = wp_parse_args( is_array( $stored ) ? $stored : array(), self::defaults() );
+        // Keep existing individual access until an administrator explicitly saves roles.
+        if ( is_array( $stored ) && ! array_key_exists( 'roles', $stored ) ) { $settings['roles'] = null; }
+        return $settings;
     }
     public static function boot() {
         add_action( 'init', array( __CLASS__, 'register_type' ) );
@@ -43,7 +47,7 @@ final class Boardino {
     public static function activate() {
         if ( false !== get_option( self::OPTION, false ) ) { return; }
         $settings = self::defaults();
-        $settings['members'] = array( get_current_user_id() );
+        unset( $settings['members'] );
         if ( self::folderino_available() ) {
             $folders = get_terms( array( 'taxonomy' => FOLDERINO_TAX, 'hide_empty' => false, 'parent' => 0 ) );
             if ( ! is_wp_error( $folders ) ) {
@@ -68,7 +72,11 @@ final class Boardino {
     }
     public static function allowed( $id = 0 ) {
         $id = $id ? absint( $id ) : get_current_user_id();
-        return $id && is_user_member_of_blog( $id ) && ( user_can( $id, 'manage_options' ) || in_array( $id, array_map( 'intval', self::settings()['members'] ), true ) );
+        if ( ! $id || ! is_user_member_of_blog( $id ) ) { return false; }
+        $settings = self::settings();
+        if ( ! is_array( $settings['roles'] ) ) { return user_can( $id, 'manage_options' ) || in_array( $id, array_map( 'intval', $settings['members'] ), true ); }
+        $user = get_userdata( $id );
+        return $user && (bool) array_intersect( $user->roles, $settings['roles'] );
     }
     public static function permission() {
         return self::allowed() ? true : new WP_Error( 'boardino_forbidden', 'You do not have access to this board.', array( 'status' => 403 ) );
@@ -77,32 +85,36 @@ final class Boardino {
         return current_user_can( 'manage_options' ) ? true : new WP_Error( 'boardino_forbidden', 'Only site administrators can change board settings.', array( 'status' => 403 ) );
     }
     public static function menu() {
-        if ( ! self::allowed() ) { return; }
+        if ( ! self::allowed() && ! current_user_can( 'manage_options' ) ) { return; }
         $icon_path = plugin_dir_path( BOARDINO_FILE ) . 'assets/boardino-sidebar.svg';
         $menu_icon = is_readable( $icon_path ) ? 'data:image/svg+xml;base64,' . base64_encode( file_get_contents( $icon_path ) ) : 'dashicons-screenoptions';
         add_menu_page( 'Boardino', 'Boardino', 'read', 'boardino', array( __CLASS__, 'page' ), $menu_icon, 58 );
-        add_submenu_page( 'boardino', 'Board', 'Board', 'read', 'boardino', array( __CLASS__, 'page' ) );
+        if ( self::allowed() ) { add_submenu_page( 'boardino', 'Board', 'Board', 'read', 'boardino', array( __CLASS__, 'page' ) ); }
         if ( current_user_can( 'manage_options' ) ) { add_submenu_page( 'boardino', 'Boardino settings', 'Settings', 'manage_options', 'boardino-settings', array( __CLASS__, 'page' ) ); }
     }
     public static function plugin_links( $links ) {
         if ( self::allowed() ) { array_unshift( $links, '<a href="' . esc_url( admin_url( 'admin.php?page=boardino' ) ) . '">Open board</a>' ); }
+        elseif ( current_user_can( 'manage_options' ) ) { array_unshift( $links, '<a href="' . esc_url( admin_url( 'admin.php?page=boardino-settings' ) ) . '">Settings</a>' ); }
         return $links;
     }
     public static function assets( $hook ) {
-        if ( ! in_array( $hook, array( 'toplevel_page_boardino', 'boardino_page_boardino-settings' ), true ) || ! self::allowed() ) { return; }
+        $settings_screen = 'boardino_page_boardino-settings' === $hook || ( current_user_can( 'manage_options' ) && ! self::allowed() );
+        if ( ! in_array( $hook, array( 'toplevel_page_boardino', 'boardino_page_boardino-settings' ), true ) || ( ! self::allowed() && !( $settings_screen && current_user_can( 'manage_options' ) ) ) ) { return; }
         wp_enqueue_style( 'boardino', plugins_url( 'assets/admin.css', BOARDINO_FILE ), array(), BOARDINO_VERSION );
         wp_enqueue_script( 'jquery-ui-sortable' );
         wp_enqueue_media();
         wp_enqueue_script( 'boardino-icons', plugins_url( 'assets/lucide-icons.js', BOARDINO_FILE ), array(), BOARDINO_VERSION, true );
         wp_enqueue_script( 'boardino', plugins_url( 'assets/admin.js', BOARDINO_FILE ), array( 'jquery', 'jquery-ui-sortable', 'media-views', 'boardino-icons' ), BOARDINO_VERSION, true );
-        wp_add_inline_script( 'boardino', 'window.BoardinoConfig = ' . wp_json_encode( array( 'api' => rest_url( self::API . '/' ), 'nonce' => wp_create_nonce( 'wp_rest' ), 'mediaNonce' => wp_create_nonce( 'boardino_media' ), 'userId' => get_current_user_id(), 'admin' => current_user_can( 'manage_options' ), 'settings' => 'boardino_page_boardino-settings' === $hook, 'boardUrl' => admin_url( 'admin.php?page=boardino' ), 'settingsUrl' => admin_url( 'admin.php?page=boardino-settings' ), 'maxUpload' => min( wp_max_upload_size(), 10 * MB_IN_BYTES ) ) ) . ';', 'before' );
+        wp_add_inline_script( 'boardino', 'window.BoardinoConfig = ' . wp_json_encode( array( 'api' => rest_url( self::API . '/' ), 'nonce' => wp_create_nonce( 'wp_rest' ), 'mediaNonce' => wp_create_nonce( 'boardino_media' ), 'userId' => get_current_user_id(), 'admin' => current_user_can( 'manage_options' ), 'settings' => $settings_screen, 'boardAccess' => self::allowed(), 'boardUrl' => admin_url( 'admin.php?page=boardino' ), 'settingsUrl' => admin_url( 'admin.php?page=boardino-settings' ), 'maxUpload' => min( wp_max_upload_size(), 10 * MB_IN_BYTES ) ) ) . ';', 'before' );
     }
     public static function page() {
-        if ( ! self::allowed() ) { wp_die( esc_html__( 'You do not have access to this board.', 'boardino' ) ); }
-        echo '<div id="boardino" class="boardino"><header class="bi-header"><a class="bi-brand" href="' . esc_url( admin_url( 'admin.php?page=boardino' ) ) . '"><img class="bi-brand-icon" src="' . esc_url( plugins_url( 'assets/boardino-icon.svg', BOARDINO_FILE ) ) . '" alt=""><h1>Boardino</h1></a><nav aria-label="Boardino"><a href="' . esc_url( admin_url( 'admin.php?page=boardino' ) ) . '">Board</a>';
+        $settings_screen = current_user_can( 'manage_options' ) && ( 'boardino-settings' === sanitize_key( $_GET['page'] ?? '' ) || ! self::allowed() );
+        if ( ! self::allowed() && ! $settings_screen ) { wp_die( esc_html__( 'You do not have access to this board.', 'boardino' ) ); }
+        echo '<div id="boardino" class="boardino"><header class="bi-header"><a class="bi-brand" href="' . esc_url( admin_url( 'admin.php?page=boardino' ) ) . '"><img class="bi-brand-icon" src="' . esc_url( plugins_url( 'assets/boardino-icon.svg', BOARDINO_FILE ) ) . '" alt=""><h1>Boardino</h1></a><nav aria-label="Boardino">';
+        if ( self::allowed() ) { echo '<a href="' . esc_url( admin_url( 'admin.php?page=boardino' ) ) . '">Board</a>'; }
         if ( current_user_can( 'manage_options' ) ) { echo '<a href="' . esc_url( admin_url( 'admin.php?page=boardino-settings' ) ) . '">Settings</a>'; }
         echo '</nav></header><hr class="wp-header-end"><main id="bi-main" class="bi-main"><div class="bi-loading" role="status"><span></span><span></span><span></span><p>Loading your board…</p></div></main>';
-        if ( current_user_can( 'manage_options' ) && 'boardino-settings' === sanitize_key( $_GET['page'] ?? '' ) ) { Boardino_Updates::screen(); }
+        if ( $settings_screen ) { Boardino_Updates::screen(); }
         echo '<div id="bi-notice" class="bi-toast" role="status" aria-live="polite" hidden></div><div id="bi-layer"></div><noscript><p>Please enable JavaScript to use Boardino.</p></noscript></div>';
     }
     public static function routes() {
@@ -141,21 +153,50 @@ final class Boardino {
         $p = get_post( absint( $id ) );
         return $p && self::TYPE === $p->post_type && 'private' === $p->post_status ? $p : self::error( 'This card could not be found.', 404 );
     }
-    private static function users( $all = false ) {
+    private static function avatar_url( $user ) {
+        if ( ! $user || ! get_option( 'show_avatars' ) ) { return ''; }
+        // Resolve the current WordPress avatar, including local-avatar filters, on every request.
+        return esc_url_raw( get_avatar_url( $user, array( 'size' => 64, 'default' => '404' ) ) ?: '' );
+    }
+    private static function roles() {
         $out = array();
-        foreach ( get_users( array( 'orderby' => 'display_name', 'order' => 'ASC' ) ) as $u ) {
-            if ( $all || self::allowed( $u->ID ) ) { $out[] = array( 'id' => (int) $u->ID, 'name' => $u->display_name, 'admin' => user_can( $u, 'manage_options' ) ); }
+        foreach ( wp_roles()->get_names() as $id => $name ) { $out[] = array( 'id' => $id, 'name' => translate_user_role( $name ) ); }
+        return $out;
+    }
+    private static function users() {
+        $out = array(); $settings = self::settings();
+        $query = array( 'orderby' => 'display_name', 'order' => 'ASC' );
+        if ( is_array( $settings['roles'] ) ) {
+            if ( ! $settings['roles'] ) { return $out; }
+            $query['role__in'] = $settings['roles'];
+        }
+        foreach ( get_users( $query ) as $u ) {
+            if ( self::allowed( $u->ID ) ) { $out[] = array( 'id' => (int) $u->ID, 'name' => $u->display_name, 'avatarUrl' => self::avatar_url( $u->ID ), 'admin' => user_can( $u, 'manage_options' ) ); }
         }
         return $out;
     }
+    private static function assignee_ids( $id ) {
+        if ( metadata_exists( 'post', $id, '_bi_assignees' ) ) {
+            return array_values( array_unique( array_filter( array_map( 'absint', (array) get_post_meta( $id, '_bi_assignees', true ) ) ) ) );
+        }
+        $legacy = absint( get_post_meta( $id, '_bi_assignee', true ) );
+        return $legacy ? array( $legacy ) : array();
+    }
     private static function card( $p ) {
-        $assignee = (int) get_post_meta( $p->ID, '_bi_assignee', true );
-        $u = $assignee ? get_userdata( $assignee ) : false;
-        return array( 'id' => (int) $p->ID, 'title' => $p->post_title, 'description' => $p->post_content, 'column' => get_post_meta( $p->ID, '_bi_column', true ), 'category' => get_post_meta( $p->ID, '_bi_category', true ), 'assignee' => $assignee, 'assigneeName' => $u ? $u->display_name : '', 'order' => (int) $p->menu_order, 'version' => (int) get_post_meta( $p->ID, '_bi_version', true ), 'archived' => (bool) get_post_meta( $p->ID, '_bi_archived', true ), 'comments' => (int) get_comments( array( 'post_id' => $p->ID, 'type' => 'boardino', 'status' => 'approve', 'count' => true ) ), 'images' => (int) get_post_meta( $p->ID, '_bi_image_count', true ) );
+        $assignees = self::assignee_ids( $p->ID ); $people = array();
+        foreach ( $assignees as $id ) {
+            $user = get_userdata( $id );
+            if ( $user ) { $people[] = array( 'id' => $id, 'name' => $user->display_name, 'avatarUrl' => self::avatar_url( $id ) ); }
+        }
+        $images = array();
+        foreach ( (array) get_post_meta( $p->ID, '_bi_images', true ) as $id ) {
+            $image = self::image( absint( $id ) ); if ( $image ) { $images[] = $image; }
+        }
+        return array( 'id' => (int) $p->ID, 'title' => $p->post_title, 'description' => $p->post_content, 'column' => get_post_meta( $p->ID, '_bi_column', true ), 'category' => get_post_meta( $p->ID, '_bi_category', true ), 'assignees' => $assignees, 'assigneeUsers' => $people, 'order' => (int) $p->menu_order, 'version' => (int) get_post_meta( $p->ID, '_bi_version', true ), 'archived' => (bool) get_post_meta( $p->ID, '_bi_archived', true ), 'comments' => (int) get_comments( array( 'post_id' => $p->ID, 'type' => 'boardino', 'status' => 'approve', 'count' => true ) ), 'images' => $images );
     }
     public static function board() {
         $posts = get_posts( array( 'post_type' => self::TYPE, 'post_status' => 'private', 'posts_per_page' => -1, 'orderby' => array( 'menu_order' => 'ASC', 'ID' => 'ASC' ), 'suppress_filters' => true ) );
-        $settings = self::settings(); unset( $settings['members'], $settings['folder_id'] );
+        $settings = self::settings(); unset( $settings['members'], $settings['roles'], $settings['folder_id'] );
         return array( 'settings' => $settings, 'users' => self::users(), 'cards' => array_map( array( __CLASS__, 'card' ), $posts ), 'revision' => self::revision() );
     }
     public static function get_settings() {
@@ -171,7 +212,7 @@ final class Boardino {
             }
             usort( $folders, static fn( $a, $b ) => strnatcasecmp( $a['name'], $b['name'] ) );
         }
-        return array( 'settings' => self::settings(), 'users' => self::users( true ), 'folderino' => $active, 'folders' => $folders, 'revision' => self::revision() );
+        return array( 'settings' => self::settings(), 'roles' => self::roles(), 'legacy_access' => ! is_array( self::settings()['roles'] ), 'boardAccess' => self::allowed(), 'folderino' => $active, 'folders' => $folders, 'revision' => self::revision() );
     }
     public static function add_column( $r ) {
         return self::mutate( static function() use ( $r ) {
@@ -195,7 +236,7 @@ final class Boardino {
             $old = self::settings(); $new = $r->get_json_params();
             $name = sanitize_text_field( $new['name'] ?? '' );
             if ( ! $name || mb_strlen( $name ) > 100 ) { return self::error( 'Give your board a name of up to 100 characters.' ); }
-            $settings = array( 'name' => $name, 'members' => array(), 'folder_id' => absint( $new['folder_id'] ?? 0 ), 'columns' => array(), 'categories' => array() );
+            $settings = array( 'name' => $name, 'roles' => array(), 'folder_id' => absint( $new['folder_id'] ?? 0 ), 'columns' => array(), 'categories' => array() );
             foreach ( array( 'columns', 'categories' ) as $key ) {
                 if ( ! isset( $new[$key] ) || ! is_array( $new[$key] ) || count( $new[$key] ) > 30 ) { return self::error( 'Use up to 30 ' . $key . '.' ); }
                 $seen = array();
@@ -209,9 +250,12 @@ final class Boardino {
                 }
             }
             if ( ! $settings['columns'] ) { return self::error( 'Keep at least one column.' ); }
-            $all = array_column( self::users( true ), 'id' );
-            if ( ! is_array( $new['members'] ?? null ) ) { return self::error( 'Please select the people who can use this board.' ); }
-            $settings['members'] = array_values( array_intersect( array_map( 'absint', $new['members'] ), $all ) );
+            if ( ! is_array( $new['roles'] ?? null ) ) { return self::error( 'Select the roles that can use this board.' ); }
+            $known_roles = array_keys( wp_roles()->get_names() );
+            foreach ( $new['roles'] as $role ) {
+                if ( ! is_string( $role ) || ! in_array( $role, $known_roles, true ) ) { return self::error( 'Choose an existing WordPress role.' ); }
+            }
+            $settings['roles'] = array_values( array_unique( $new['roles'] ) );
             if ( $settings['folder_id'] ) {
                 if ( ! self::folderino_available() ) {
                     if ( $settings['folder_id'] !== (int) $old['folder_id'] ) { return self::error( 'Folderino is not active. Choose the normal Media Library.' ); }
@@ -227,8 +271,9 @@ final class Boardino {
             foreach ( $cards as $id ) {
                 $changed = false;
                 if ( ! in_array( get_post_meta( $id, '_bi_category', true ), self::ids( $settings['categories'] ), true ) && get_post_meta( $id, '_bi_category', true ) ) { delete_post_meta( $id, '_bi_category' ); $changed = true; }
-                $assignee = (int) get_post_meta( $id, '_bi_assignee', true );
-                if ( $assignee && ! self::allowed( $assignee ) ) { delete_post_meta( $id, '_bi_assignee' ); $changed = true; }
+                $assigned = self::assignee_ids( $id );
+                $remaining = array_values( array_filter( $assigned, array( __CLASS__, 'allowed' ) ) );
+                if ( $assigned !== $remaining ) { update_post_meta( $id, '_bi_assignees', $remaining ); delete_post_meta( $id, '_bi_assignee' ); $changed = true; }
                 if ( $changed ) { update_post_meta( $id, '_bi_version', (int) get_post_meta( $id, '_bi_version', true ) + 1 ); }
             }
             return array( 'saved' => true );
@@ -240,11 +285,37 @@ final class Boardino {
         if ( ! $title || mb_strlen( $title ) > 200 ) { return self::error( 'Give your card a title of up to 200 characters.' ); }
         $description = sanitize_textarea_field( $data['description'] ?? '' );
         if ( mb_strlen( $description ) > 20000 ) { return self::error( 'Keep the description under 20,000 characters.' ); }
-        $column = sanitize_key( $data['column'] ?? '' ); $category = sanitize_key( $data['category'] ?? '' ); $assignee = absint( $data['assignee'] ?? 0 );
+        $column = sanitize_key( $data['column'] ?? '' ); $category = sanitize_key( $data['category'] ?? '' ); $raw_assignees = $data['assignees'] ?? ( empty( $data['assignee'] ) ? array() : array( $data['assignee'] ) );
         if ( ! in_array( $column, self::ids( $s['columns'] ), true ) ) { return self::error( 'Choose an existing column.' ); }
         if ( $category && ! in_array( $category, self::ids( $s['categories'] ), true ) ) { return self::error( 'Choose an existing category.' ); }
-        if ( $assignee && ! self::allowed( $assignee ) ) { return self::error( 'Choose a person who has access to this board.' ); }
-        return compact( 'title', 'description', 'column', 'category', 'assignee' );
+        $assignees = self::validate_ids( $raw_assignees, 'Please select people from this board.' );
+        if ( is_wp_error( $assignees ) ) { return $assignees; }
+        foreach ( $assignees as $assignee ) { if ( ! self::allowed( $assignee ) ) { return self::error( 'Choose people who have access to this board.' ); } }
+        sort( $assignees, SORT_NUMERIC );
+        $images = self::validate_ids( $data['images'] ?? array(), 'Please check the task images.' );
+        if ( is_wp_error( $images ) ) { return $images; }
+        if ( count( $images ) > 10 ) { return self::error( 'You can attach up to 10 images to a task.' ); }
+        foreach ( $images as $image ) { if ( ! self::can_use_image( $image ) ) { return self::error( 'One of these images is unavailable or you do not have access to it.' ); } }
+        return compact( 'title', 'description', 'column', 'category', 'assignees', 'images' );
+    }
+    private static function validate_ids( $raw, $message ) {
+        if ( ! is_array( $raw ) ) { return self::error( $message ); }
+        foreach ( $raw as $id ) {
+            if ( !( is_int( $id ) || ( is_string( $id ) && ctype_digit( $id ) ) ) || (int) $id < 1 ) { return self::error( $message ); }
+        }
+        return array_values( array_unique( array_map( 'absint', $raw ) ) );
+    }
+    private static function save_card_meta( $id, $data ) {
+        foreach ( array( 'column', 'category', 'assignees', 'images' ) as $key ) { update_post_meta( $id, '_bi_' . $key, $data[$key] ); }
+        // The array becomes the single owner when an old card is first saved.
+        delete_post_meta( $id, '_bi_assignee' );
+        foreach ( $data['images'] as $image ) {
+            if ( ! get_post_meta( $image, '_bi_card', true ) && (int) get_post_meta( $image, '_bi_uploader', true ) === get_current_user_id() ) { update_post_meta( $image, '_bi_card', $id ); }
+        }
+    }
+    private static function first_order( $column ) {
+        $posts = get_posts( array( 'post_type' => self::TYPE, 'post_status' => 'private', 'posts_per_page' => 1, 'meta_key' => '_bi_column', 'meta_value' => $column, 'orderby' => 'menu_order', 'order' => 'ASC', 'meta_query' => array( array( 'key' => '_bi_archived', 'compare' => 'NOT EXISTS' ) ) ) );
+        return $posts ? (int) $posts[0]->menu_order - 1 : 0;
     }
     private static function next_order( $column ) {
         $posts = get_posts( array( 'post_type' => self::TYPE, 'post_status' => 'private', 'posts_per_page' => 1, 'meta_key' => '_bi_column', 'meta_value' => $column, 'orderby' => 'menu_order', 'order' => 'DESC', 'meta_query' => array( array( 'key' => '_bi_archived', 'compare' => 'NOT EXISTS' ) ) ) );
@@ -253,9 +324,9 @@ final class Boardino {
     public static function create_card( $r ) {
         return self::mutate( static function() use ( $r ) {
             $d = self::validate_card( $r->get_json_params() ); if ( is_wp_error( $d ) ) { return $d; }
-            $id = wp_insert_post( wp_slash( array( 'post_type' => self::TYPE, 'post_status' => 'private', 'post_title' => $d['title'], 'post_content' => $d['description'], 'post_author' => get_current_user_id(), 'comment_status' => 'closed', 'menu_order' => self::next_order( $d['column'] ) ) ), true );
+            $id = wp_insert_post( wp_slash( array( 'post_type' => self::TYPE, 'post_status' => 'private', 'post_title' => $d['title'], 'post_content' => $d['description'], 'post_author' => get_current_user_id(), 'comment_status' => 'closed', 'menu_order' => self::first_order( $d['column'] ) ) ), true );
             if ( is_wp_error( $id ) ) { return $id; }
-            foreach ( array( 'column', 'category', 'assignee' ) as $key ) { update_post_meta( $id, '_bi_' . $key, $d[$key] ); }
+            self::save_card_meta( $id, $d );
             update_post_meta( $id, '_bi_version', 1 );
             return self::card( get_post( $id ) );
         } );
@@ -271,11 +342,14 @@ final class Boardino {
                 else { delete_post_meta( $p->ID, '_bi_archived' ); wp_update_post( array( 'ID' => $p->ID, 'menu_order' => self::next_order( get_post_meta( $p->ID, '_bi_column', true ) ) ) ); }
             } else {
                 if ( get_post_meta( $p->ID, '_bi_archived', true ) ) { return self::error( 'Restore this card before editing it.' ); }
-                $d = self::validate_card( $r->get_json_params() ); if ( is_wp_error( $d ) ) { return $d; }
+                $data = $r->get_json_params();
+                if ( ! array_key_exists( 'images', $data ) ) { $data['images'] = array_column( self::card( $p )['images'], 'id' ); }
+                if ( ! array_key_exists( 'assignees', $data ) && ! array_key_exists( 'assignee', $data ) ) { $data['assignees'] = self::assignee_ids( $p->ID ); }
+                $d = self::validate_card( $data ); if ( is_wp_error( $d ) ) { return $d; }
                 $patch = array( 'ID' => $p->ID, 'post_title' => $d['title'], 'post_content' => $d['description'] );
                 if ( $d['column'] !== get_post_meta( $p->ID, '_bi_column', true ) ) { $patch['menu_order'] = self::next_order( $d['column'] ); }
                 $result = wp_update_post( wp_slash( $patch ), true ); if ( is_wp_error( $result ) ) { return $result; }
-                foreach ( array( 'column', 'category', 'assignee' ) as $key ) { update_post_meta( $p->ID, '_bi_' . $key, $d[$key] ); }
+                self::save_card_meta( $p->ID, $d );
             }
             update_post_meta( $p->ID, '_bi_version', (int) get_post_meta( $p->ID, '_bi_version', true ) + 1 );
             return self::card( get_post( $p->ID ) );
@@ -309,6 +383,7 @@ final class Boardino {
         if ( ! $p || 'attachment' !== $p->post_type || ! wp_attachment_is_image( $id ) || ! in_array( $p->post_status, array( 'inherit', 'private' ), true ) ) { return false; }
         $card_id = (int) get_post_meta( $id, '_bi_card', true );
         if ( $card_id && ! is_wp_error( self::post( $card_id ) ) && self::allowed() ) { return true; }
+        if ( ! $card_id && (int) get_post_meta( $id, '_bi_uploader', true ) === get_current_user_id() && self::allowed() ) { return true; }
         return current_user_can( 'read_post', $id );
     }
     private static function media_context() {
@@ -332,10 +407,14 @@ final class Boardino {
         return self::media_context() && ! self::can_use_image( $attachment->ID ) ? null : $response;
     }
     public static function media_uploaded( $id ) {
-        if ( ! self::media_context() || empty( $_REQUEST['boardino_card'] ) || ! wp_attachment_is_image( $id ) ) { return; }
-        $card = self::post( absint( $_REQUEST['boardino_card'] ) );
-        if ( is_wp_error( $card ) || get_post_meta( $card->ID, '_bi_archived', true ) ) { return; }
-        update_post_meta( $id, '_bi_card', $card->ID ); update_post_meta( $id, '_bi_uploader', get_current_user_id() );
+        if ( ! self::media_context() || ! isset( $_REQUEST['boardino_card'] ) || ! wp_attachment_is_image( $id ) ) { return; }
+        $card_id = absint( $_REQUEST['boardino_card'] );
+        if ( $card_id ) {
+            $card = self::post( $card_id );
+            if ( is_wp_error( $card ) || get_post_meta( $card->ID, '_bi_archived', true ) ) { return; }
+            update_post_meta( $id, '_bi_card', $card_id );
+        }
+        update_post_meta( $id, '_bi_uploader', get_current_user_id() );
         // Only newly uploaded images are categorized; selecting an existing file never moves it.
         $settings = self::settings();
         if ( $settings['folder_id'] && self::folderino_available() ) {
@@ -369,7 +448,7 @@ final class Boardino {
         foreach ( get_comments( array( 'post_id' => $p->ID, 'type' => 'boardino', 'status' => 'approve', 'orderby' => 'comment_ID', 'order' => 'ASC', 'number' => 0 ) ) as $c ) {
             $images = array(); foreach ( (array) get_comment_meta( $c->comment_ID, '_bi_images', true ) as $id ) { $image = self::image( absint( $id ) ); if ( $image ) { $images[] = $image; } }
             $user = get_userdata( $c->user_id );
-            $comments[] = array( 'id' => (int) $c->comment_ID, 'author' => $user ? $user->display_name : $c->comment_author, 'userId' => (int) $c->user_id, 'text' => $c->comment_content, 'date' => get_comment_date( 'c', $c ), 'images' => $images );
+            $comments[] = array( 'id' => (int) $c->comment_ID, 'author' => $user ? $user->display_name : $c->comment_author, 'userId' => (int) $c->user_id, 'avatarUrl' => self::avatar_url( $user ? $user->ID : 0 ), 'text' => $c->comment_content, 'date' => get_comment_date( 'c', $c ), 'images' => $images );
         }
         return array( 'card' => self::card( $p ), 'comments' => $comments );
     }
